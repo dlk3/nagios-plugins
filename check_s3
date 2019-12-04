@@ -1,0 +1,118 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use POSIX;
+use Getopt::Long;
+use Net::Amazon::S3;
+
+#  Initialize the plugin and the arguments
+my $np = Nagios::Plugin->new(
+	shortname => 'S3',
+	usage => "Usage: check_s3 -a|--access_key=<string> -s|--secret_key=<string> -b|--bucket=<string> -f|--filename=<string>",
+	version => "1.0",
+	blurb => "This Nagios plugin checks an AWS S3 bucket to see if it contains a file whose\n"
+		. "name matches the specified pattern.",
+	url => "http://sourceforge.net/projects/nagios-plugins"
+ );
+
+$np->add_arg(
+	spec => 'access_key|a=s',
+	help => "-a, --access_key=<string>\n"
+		. "   Provided by Amazon, your Access Key identifies you as the party responsible\n"
+		. "   for the requests you send to Amazon S3.\n"
+		. "   For security reasons this argument should probably be specified in a Nagios\n"
+		. "   extra-opts file rather than on the command line.  For additional information\n"
+		. "   on the extra-opts facility see http://nagios-plugins.org/doc/extra-opts.html.",
+	required => 1
+);
+$np->add_arg(
+	spec => 'secret_key|s=s',
+	help => "-s, --secret_key=<string>\n"
+		. "   Provided by Amazon, your Secret Key verifies that a request containing\n"
+		. "   your Access Key could only have come from you.\n"
+		. "   For security reasons this argument should probably be specified in a Nagios\n"
+		. "   extra-opts file rather than on the command line.  For additional information\n"
+		. "   on the extra-opts facility see http://nagios-plugins.org/doc/extra-opts.html.",
+	required => 1
+);
+$np->add_arg(
+	spec => 'bucket|b=s',
+	help => "-b, --bucket=<string>\n"
+		. "   Takes a scalar argument, the name of the bucket you're querying.",
+	required => 1
+);
+$np->add_arg(
+	spec => 'filename|f=s',
+	help => "-f, --filename=<string>\n"
+		. "   Takes a scalar argument, the name of file being checked or a\n"
+		. "   regex which will match the file name.",
+	required => 1
+);
+$np->getopts;
+my $access_key = $np->opts->access_key;
+my $secret_key = $np->opts->secret_key;
+my $bucket_name = $np->opts->bucket;
+my $filename = $np->opts->filename;
+
+#  Connect to S3
+my $s3 = Net::Amazon::S3->new(
+	{	
+		aws_access_key_id => $access_key,
+		aws_secret_access_key => $secret_key,
+		retry => 1,
+	}
+);
+
+#  Specify the bucket
+my $bucket = $s3->bucket($bucket_name);
+
+# my  ($s, $min, $h, $d, $m, $y) = localtime();    
+# my $today = strftime "%Y%m%d", localtime();
+# my $yesterday = strftime "%Y%m%d", $s, $min, $h, $d - 1, $m, $y;
+
+#  Look through all the files in the bucket to see if there's a match
+my $response = $bucket->list_all
+	or die $s3->err . ": " . $s3->errstr;
+if (%{$response}) {
+	foreach my $key ( @{ $response->{keys} } ) {
+		my $key_name = $key->{key};
+		if ($key_name =~/$filename/) {
+			$np->nagios_exit(OK, "Found $key_name in the $bucket_name bucket");
+		}	
+	}
+	$np->nagios_exit(CRITICAL, "'$filename' does not match anything in the $bucket_name bucket");
+} else {
+	$np->nagios_exit(CRITICAL, "AWS S3 did not respond.  Have you specified your S3 credentials properly?");
+}
+
+=head1 DESCIPTION
+
+This Nagios plugin checks an AWS S3 bucket to see if it contains a
+file whose name matches the specified pattern.  
+
+This plugin requires the Net::Amazon::S3 module.
+
+Please see the plugin help (check_s3 -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

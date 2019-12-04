@@ -1,0 +1,97 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use POSIX;
+use Getopt::Long;
+use IO::Socket::INET;
+
+#  Initialize the plugin and the arguments
+my $np = Nagios::Plugin->new(
+	shortname => 'MPD',
+	usage => "Usage: check_mpd [-H|--hostname=<hostname>] [-p|--port=<port>]",
+	version => "1.0",
+	blurb => "This plugin monitors the MPD music player daemon service.  If the daemon says\n"
+		. "that it is not playing then the plugin will issue the \"mpc play\" command.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+ );
+
+$np->add_arg(
+	spec => 'hostname|H=s',
+	help => "-H, --hostname=<hostname>\n"
+		. "   Hostname or IP address of the host running MPD.\n"
+		. "   Default = 127.0.0.1",
+	default => 127.0.0.1,
+	required => 0
+);
+$np->add_arg(
+	spec => 'port|p=s',
+	help => "-p, --port=<port>\n"
+		. "   MPD daemon's RPC port number, as listed in /etc/mpd.conf.\n"
+		. "   Default = 6600",
+	default => 6600,
+	required => 0
+);
+$np->getopts;
+my $hostname = $np->opts->hostname;
+my $port = $np->opts->port;
+
+#  Get current status info
+#my $status = `echo -e 'status\\nclose' | nc $hostname $port 2>/dev/null | grep state: | sed -e 's/state: //'`;
+my $status = `echo 'status' | nc $hostname $port 2>/dev/null | grep state: | sed -e 's/state: //'`;
+chomp $status;
+if (length($status) == 0) {
+	$np->nagios_exit(CRITICAL, 'mpd not responding');
+} elsif ($status ne "play") {
+	#$status = `echo -e 'play\\nclose' | nc $hostname $port 2>/dev/null | grep state: | sed -e 's/state: //'`;
+	`echo 'play' | nc $hostname $port 2>/dev/null`;
+	$np->add_message(WARNING, "mpd on $hostname was stopped, sent play command");
+}
+
+#  Check to make sure that time changes across 5 second period 
+#my $saved_time = `echo -e 'status\\nclose' | nc $hostname $port 2>/dev/null | grep time: | sed -e 's/time: //'`;
+my $saved_time = `echo 'status' | nc $hostname $port 2>/dev/null | grep time: | sed -e 's/time: //'`;
+chomp $saved_time;
+sleep 5;
+#my $time = `echo -e 'status\\nclose' | nc $hostname $port 2>/dev/null | grep time: | sed -e 's/time: //'`;
+my $time = `echo 'status' | nc $hostname $port 2>/dev/null | grep time: | sed -e 's/time: //'`;
+chomp $time;
+if ($time eq $saved_time) {
+	$np->add_message(WARNING, "MPD appears stalled");
+} else {
+	my $song = `echo 'currentsong'| nc $hostname $port 2>/dev/null | grep file: | sed -e 's/file: //'`;
+	chomp $song;
+	$np->add_message(OK, "mpd playing $song");
+}
+
+my ($code, $message) = $np->check_messages( join => ", " ) ;
+$np->nagios_exit($code, $message);
+
+=head1 DESCIPTION
+
+This is a Nagios plugin that monitors the MPD music playing daemon to make
+sure that it is actively playing music.
+
+Please see the plugin help (check_mpd -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

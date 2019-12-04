@@ -1,0 +1,116 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use POSIX;
+use Getopt::Long;
+use IO::Socket::INET;
+
+#  Initialize the plugin and the arguments
+my $np = Nagios::Plugin->new(
+	shortname => 'XMMS2',
+	usage => "Usage: check_xmms2 [-H|--hostname=<hostname>] [-p|--port=<port>]",
+	version => "1.0",
+	blurb => "This plugin monitors the xmms2 music player daemon service.  If the daemon says\n"
+		."that it is \"Stopped:\" then the plugin will issue the \"xmms2 play\" command.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+	extra => "\nNOTES:\nThe xmms2 client application must be installed on the system running this\n"
+		. "plugin.  Typically, this would the Nagios server itself."
+ );
+
+$np->add_arg(
+	spec => 'hostname|H=s',
+	help => "-H, --hostname=<hostname>\n"
+		. "   Hostname or IP address of the host running xmms2.\n"
+		. "   Default = 127.0.0.1",
+	default => 127.0.0.1,
+	required => 0
+);
+$np->add_arg(
+	spec => 'port|p=s',
+	help => "-p, --port=<number>\n"
+		. "   Port number for xmms2's RPC port.\n"
+		. "   Default = 8888",
+	default => 8888,
+	required => 0
+);
+$np->getopts;
+my $hostname = $np->opts->hostname;
+my $port = $np->opts->port;
+
+#  Point at the XMMS2 server
+$ENV{XMMS_PATH} = "tcp://$hostname:$port";
+
+#  Get current status info
+open(STATUS, "xmms2 current |")
+	or $np->nagios_exit(CRITICAL, "xmms2 current command failed");
+my $saved_result;
+while (<STATUS>) {
+	chomp;
+	my $result = $_;
+	$saved_result = $result;
+	if ($result =~ /Could not connect/) {
+		$np->nagios_exit(CRITICAL, "Could not connect to xmms2d on $hostname port $port");
+	} elsif ($result =~ /Stopped:/) {
+		open(PLAY, "xmms2 play 2>&1 |")
+			or $np->nagios_exit(CRITICAL, "xmms2 play command failed");
+		close (PLAY);
+		$np->nagios_exit(WARNING, "xmms2d on $hostname port $port is stopped, sent play command");
+	}
+}
+close(STATUS);
+
+#  Wait 5 seconds and do it again.  If the message is different, we assume 
+#  xmms2d is making noise
+sleep 5;
+open(STATUS, "xmms2 current |")
+	or $np->nagios_exit(CRITICAL, "xmms2 command failed");
+while (<STATUS>) {
+	chomp;
+	my $result = $_;
+	if ($result eq $saved_result) {
+		$np->add_perfdata(
+			label => "previous",
+			value => $saved_result
+		);
+		$np->add_perfdata(
+			label => "current",
+			value => $result
+		);
+		$np->nagios_exit(WARNING, "xmms2 on $hostname port $port may be stalled");
+	} else {
+		$np->nagios_exit(OK, "$result");
+	}
+}
+close(STATUS);
+
+=head1 DESCIPTION
+
+This is a Nagios plugin that monitors the xmms2 music playing daemon to make
+sure that it is actively playing music.
+
+This plugin requires that the xmms2 client be installed. 
+
+Please see the plugin help (check_xmms2 -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

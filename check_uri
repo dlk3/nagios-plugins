@@ -1,0 +1,74 @@
+#!/usr/bin/env python
+
+import requests
+import os
+from optparse import OptionParser
+
+def return_unknown(message):
+	print message
+	exit(3)
+	
+def return_critical(message):
+	print message
+	exit(2)
+
+def main():
+	usage = '%prog [options]'
+	description = '''A Nagios plugin to check access to HTTP server URIs.  It
+differs from the check_http plugin in that, if basic authntication fails, it will
+try Digest Authentication.'''
+	parser = OptionParser(usage=usage, description=description)
+	parser.add_option('-H', '--host', dest='host', help='Host name or IP address for server')
+	parser.add_option('-p', '--port', dest='port', default=80, help='HTTP/HTTPS port number.  Default = 80')
+	parser.add_option('--ssl', dest='ssl', action='store_true', default=False, help='Use SSL communications')
+	parser.add_option('--validate', dest='validate', action='store_false', default=True, help='Do not check the validity of SSL certificates')
+	parser.add_option('-a', '--auth', dest='auth', help='Colon seperated user and password string for authentication: "userid:passwrd"')
+	parser.add_option('-u', '--uri', dest='uri', default='/', help='URI string to be tested.  Default = "/"')
+	parser.add_option('-t', '--timeout', dest='timeout', default=10, help='Timeout, in seconds. Default = 10')
+	(opts, args) = parser.parse_args()
+
+	if opts.host == None:
+		return_unknown('A host name must be sepcified on the command line using the -H|--host option.')
+	else:
+		if opts.ssl:
+			url = 'https://' + opts.host
+		else:
+			url = 'http://' + opts.host
+
+	try:
+		if opts.port != 80:
+			p = int(opts.port)
+			p = str(p)
+			url = url + ":" + p
+	except Exception as e:
+		return_unknown('-p|--port must be a port number, an integer')
+
+	if not opts.validate:
+		requests.packages.urllib3.disable_warnings()
+		
+	try:
+		if opts.uri != None:
+			os.path.join(url, opts.uri)
+
+		if opts.auth != None:
+			(userid, password) = opts.auth.split(':')
+			if userid == '' or password == '':
+				return_unknown('-a|--auth must be in the form "userid:password"')
+			response = requests.get(url, auth=(userid, password), timeout=opts.timeout)
+			if response.status_code == 401:
+				response = requests.get(url, auth=requests.auth.HTTPDigestAuth(userid, password), timeout=opts.timeout)
+		else:
+			response = requests.get(url, timeout=opts.timeout)
+		if response.status_code != 200:
+			return_critical('HTTP status code: {}'.format(response.status_code))
+	except requests.exceptions.Timeout as e:
+		return_critical('Timed out while waiting for response')
+	except requests.exceptions.SSLError as e:
+		return_critical('Failed to establish SSL connection to host')
+	except requests.exceptions.ConnectionError as e:
+		return_critical('Failed to connect to host port {}'.format(opts.port))
+	
+	print 'URI accessed successfully'
+	
+if __name__ == '__main__':
+	main()

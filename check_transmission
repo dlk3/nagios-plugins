@@ -1,0 +1,94 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use Getopt::Long;
+use IO::Socket::INET;
+use File::Which;
+
+#  Initialize the plugin and the arguments
+my $np = Nagios::Plugin->new(
+	shortname => 'TRANSMISSION',
+	usage => "Usage: check_transmission [-H|--hostname=<hostname>] [-p|--port=<port>]",
+	version => "1.0",
+	blurb => "This plugin monitors the status of the transmission bittorrent daemon service.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+	extra => "\nNOTES:\n* The transmission client application must be installed on the system running\n"
+		. "  this plugin.  Typically, this would be the Nagios server itself.  That server\n"
+		. "  must be authorized to issue RPC commands to the daemon.\n"
+		. "* The File::Which module is required.",
+ );
+
+$np->add_arg(
+	spec => 'hostname|H=s',
+	help => "-H, --hostname=<hostname>\n"
+		. "   Hostname or IP address of the host running the transmission daemon.\n"
+		. "   Default = 127.0.0.1",
+	default => 127.0.0.1,
+	required => 0
+);
+$np->add_arg(
+	spec => 'port|p=s',
+	help => "-p, --port=<number>\n"
+		. "   Port number for transmission's RPC port.\n"
+		. "   Default = 9091",
+	default => 9091,
+	required => 0
+);
+$np->getopts;
+my $hostname = $np->opts->hostname;
+my $port = $np->opts->port;
+
+#  Confirm the command that we need exists on this system
+my $cmd_name = "transmission-remote";
+my $cmd = which($cmd_name) 
+	or $np->nagios_die(CRITICAL, "$cmd_name command not in PATH");
+
+#  Check the daemon's status
+my @result = `$cmd ${hostname}:$port -si 2>&1`;
+if ($?) {
+	foreach (@result) {
+		chomp;
+		my $status = $_;
+		$status =~ s/[^\)]*\) //;
+		$np->add_message(CRITICAL, $status);
+	}
+} else {
+	$np->add_message(OK, "");
+}
+
+#  Return the result
+my ($code, $message) = $np->check_messages;
+$np->nagios_exit($code, $message);
+
+
+=head1 DESCIPTION
+
+This is a Nagios plugin that monitors the status of the transmission bittorrent
+daemon.
+
+This plugin requires that the transmission client be installed. 
+
+Please see the plugin help (check_transmission -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

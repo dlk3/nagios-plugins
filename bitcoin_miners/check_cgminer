@@ -1,0 +1,289 @@
+#!/usr/bin/perl -w
+
+use POSIX;
+use strict;
+
+use Nagios::Plugin;
+
+use Getopt::Long;
+
+use IO::Socket::INET;
+use JSON qw(decode_json);
+use Data::Dumper;
+
+my $np = Nagios::Plugin->new(
+	shortname => 'CGMINER',
+	usage => "Usage: check_cgminer [-H|--hostname=<hostname>] [-p|--port=<port>]\n"
+		. "       [-w|--warning=THRESHOLD] [-c|--critical=THRESHOLD]\n"
+		. "       [-W|--tempwarning=THRESHOLD] [-C|--tempcritical=THRESHOLD]\n"
+		. "       [-x|--chipwarning=THRESHOLD] [-y|--chipcritical=THRESHOLD]",
+	version => "1.0",
+	blurb => "This plugin checks the status of an instance of the cgminer bitcoin mining\n"
+		. "application.  Mining speed (MH/s) and mining pool are checked.  On BITMAIN\n"
+		. "AntMiner devices, chip faults and board temperatures are also checked.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+	extra => "\nSee https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT\n"
+		. "for the details on Nagios threshold formats."
+);
+
+$np->add_arg(
+	spec => 'hostname|H=s', 
+	help => "-H, --hostname=<hostname>\n"
+		. "   The hostname or ip address of the system where the cgminer application is\n"
+		. "   running.  Default = 127.0.0.1." ,
+	default => "127.0.0.1",
+	required => 0
+);
+$np->add_arg(
+	spec => 'port|p=s', 
+	help => "-p, --port=<port>\n"
+		. "   The cgminer application RPC port as specified in the cgminer.conf config\n"
+		. "   file.  Default = 4028." ,
+	default => "4028",
+	required => 0
+);
+$np->add_arg(
+	spec => 'warning|w=s',
+	help => "-w, --warning=<threshold>\n"
+		. "    Mining rate (MH/s) warning threshold. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'critical|c=s',
+	help => "-c, --critical=<threshold>\n"
+		. "    Mining rate (MH/s) critical threshold. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'tempwarning|W=s',
+	help => "-W, --tempwarning=<threshold>\n"
+		. "    Applies to BITMAIN ANTMiner devices only:\n"
+		. "    Board temperature warning theshold, in degrees Celsius.  By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'tempcritical|C=s',
+	help => "-C, --tempcritical=<threshold>\n"
+		. "    Applies to BITMAIN ANTMiner devices only:\n"
+		. "    Board tempurature critical theshold, in degrees Celsius. By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'chipwarning|x=s',
+	help => "-x, --chipwarning=<theshold>\n"
+		. "    Applies to BITMAIN ANTMiner devices only:\n"
+		. "    Chip failure warning theshold, in number of failing chips. By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'chipcritical|y=s',
+	help => "-y, --chipcritical=<threshold>\n"
+		. "    Applies to BITMAIN ANTMiner devices only:\n"
+		. "    Chip failure critical theshold, in number of failing chips. By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+
+$np->getopts;
+my $host = $np->opts->hostname;
+my $port = $np->opts->port;
+my $warning = $np->opts->warning;
+my $critical = $np->opts->critical;
+my $temp_warning = $np->opts->tempwarning;
+my $temp_critical = $np->opts->tempcritical;
+my $chip_warning = $np->opts->chipwarning;
+my $chip_critical = $np->opts->chipcritical;
+
+#  Subroutine to send a command to the cgminer app and return the result as
+#  decoded JSON
+sub send_command {
+	if (@_ != 3) {
+		$np->nagios_die('CRITICAL', 'send_command routine called with the wrong number of arguments');
+	}
+	my ($host, $port, $cmd) = @_;
+	my $socket = new IO::Socket::INET (
+		PeerHost => "$host",
+		PeerPort => "$port",
+		Proto => 'tcp')
+	or $np->nagios_die('CRITICAL', "Unable to connect to port $port on $host");
+	$socket->send($cmd);
+	my $result;
+	$socket->recv($result, 4096);
+	$socket->close();
+	#  Return decoded JSON, returning empty string if that fails
+	eval {
+		return decode_json($result);
+	} or do {
+		return '';
+	}
+}
+
+#  Get cgminer's summary information
+my $summary= send_command($host, $port, '{"command":"summary"}');
+$np->nagios_die("CRITICAL", "cgminer did not respond to summary query") unless defined $summary;
+
+#  Get cgminer's pool list
+my $pools = send_command($host, $port, '{"command":"pools"}');
+$np->nagios_die("CRITICAL", "cgminer did not respond to pools query") unless defined $pools;
+
+#  Get cgminer's stats
+my $stats = send_command($host, $port, '{"command":"stats"}');
+$np->nagios_die("CRITICAL", "cgminer did not respond to stats query") unless defined $stats;
+
+#  For debugging - pretty print the JSON
+#print Dumper $summary;
+#print Dumper $pools;
+#print Dumper $stats;
+
+#  Extract performance data from the JSON
+my $mhs = 0;
+if ($summary->{'SUMMARY'}[0]{'MHS av'}) {
+	$mhs = $summary->{'SUMMARY'}[0]{'MHS av'};
+} else {
+	$mhs = $summary->{'SUMMARY'}[0]{'GHS av'};
+	$mhs = $mhs * 1024;
+}
+$np->add_message($np->check_threshold($mhs), "Mining at $mhs MH/s") ;
+$np->add_perfdata(
+	label =>"MH/s",
+	value => "$mhs",
+	warning => $warning,
+	critical => $critical
+);
+
+#  Look at all the pools in the list
+my $pool;
+my $elapsed = 0;
+my $current_lst = -1;
+my $current = "<unknown>";
+my $ctr = 0;
+while ($pools->{'POOLS'}[$ctr]{'Status'}) {
+	#  If 'Last Share Time' is a floating point number
+	if ($pools->{'POOLS'}[$ctr]{'Last Share Time'} =~ /^[+-]?(?=\.?\d)\d*\.?\d*(?:e[+-]?\d+)?\z/i) {
+		if ($pools->{'POOLS'}[$ctr]{'Last Share Time'} != 0) {
+			$elapsed = time() - $pools->{'POOLS'}[$ctr]{'Last Share Time'};
+		}
+	} else {
+		#  Otherwise we have to parse it into parts and calculate
+		my ($hours, $minutes, $seconds) = split(':', $pools->{'POOLS'}[$ctr]{'Last Share Time'});
+		$elapsed = $hours * 3600 + $minutes * 60 + $seconds;
+	}
+	#  The current one is the one with the shortest elapsed time
+	if ($current_lst == -1 or $elapsed < $current_lst) {
+		$current_lst = $elapsed;
+		$current = $pools->{'POOLS'}[$ctr]{'URL'};
+	}
+	$ctr++;
+}
+if ($current eq $pools->{'POOLS'}[0]{'URL'}) {
+	$np->add_message(OK, "Mining on the primary pool");
+} else {
+	$np->add_message(WARNING, "Mining on the backup pool");
+}
+$np->add_perfdata(
+	label =>"Pool",
+	value => "$current"
+);
+
+#  For BITMAIN AntMiner devices
+
+#  If there is a chip status element, i.e., this is a BITMAIN AntMiner ...
+if ($stats && $stats->{'STATS'}[0]{'chain_acs1'}) {
+	#  Get chip status for each board
+	my $chip_faults;
+	my $chip_faults_ctr = 0;
+	for (my $board = 1; $board <= $stats->{'STATS'}[0]{'temp_num'}; $board++) {
+		#  Get chip status from JSON
+		my $c = $stats->{'STATS'}[0]{'chain_acs' . $board};
+		#  Remove the spaces
+		$c =~ s/ //g;
+		#  If there are "x" chars in the string, record their
+		#  position in "BoardNumber-ChipNumber" format and
+		#  count how many there are
+		my $offset = 0;
+		my $pos = index($c, 'x', $offset);
+		while ($pos != -1) {
+			$chip_faults_ctr++;
+			if ($chip_faults) {
+				$chip_faults .= ',' . $board . '-' . $pos;
+			} else {
+				$chip_faults = $board . '-' . $pos;
+			}
+			$offset = $pos + 1;
+			$pos = index($c, 'x', $offset);
+		}
+	}
+
+	#  Alert on chip faults
+	$np->add_message($np->check_threshold(
+			check => $chip_faults_ctr, 
+			warning => $chip_warning, 
+			critical => $chip_critical
+		), "$chip_faults_ctr chip faults");
+
+	#  Write chip faults into performance data
+	if ($chip_faults_ctr > 0) {
+		$np->add_perfdata(
+			label => "Chips_Failing",
+			value => $chip_faults,
+			warning => $chip_warning, 
+			critical => $chip_critical
+		);
+	}
+}
+
+#  If there is a temperature element, i.e., this is a BITMAIN AntMiner ...
+if ($stats && $stats->{'STATS'}[0]{'temp1'}) {
+	#  For each board
+	for (my $board = 1; $board <= $stats->{'STATS'}[0]{'temp_num'}; $board++) {
+		#  Alert on temperature
+		$np->add_message($np->check_threshold(
+				check => $stats->{'STATS'}[0]{'temp' . $board}, 
+				warning => $temp_warning, 
+				critical => $temp_critical
+			), "Board $board at " . $stats->{'STATS'}[0]{'temp' . $board} . "C");
+
+		#  Write board temperature into performance data
+		$np->add_perfdata(
+			label => "Temp$board",
+			value => $stats->{'STATS'}[0]{'temp' . $board},
+			warning => $temp_warning,
+			critical => $temp_critical
+		);
+	}
+}
+
+my ($code, $message) = $np->check_messages( join => ", ");
+$np->nagios_exit($code, $message);
+
+=head1 DESCRIPTION
+
+This is a Nagios plugin intended to provide monitoring of the cgminer bitcoin
+mining application.  It checks mining rate and mining pool.  On BITMAIN 
+ANTMiner S1, S2 and S3 devices it also checks chip faults and board 
+temperatures.
+
+Please see the plugin help (check_cgminer -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut
+

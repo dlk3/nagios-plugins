@@ -1,0 +1,45 @@
+#!/usr/bin/env python
+
+#  Monitor status of Linux software RAID arrays based on the contents of
+#  the /proc/mdstat file.  
+
+#  This plugin needs to be run locally on the system containing the RAID
+#  array.  Use NRPE to run it.
+
+#  Requires the mdstat Python module: "pip install mdstat"
+import mdstat
+
+import json
+import sys
+
+raid_status = mdstat.parse()
+# print json.dump(device_status, indent=4)
+
+found = False
+warning = False
+critical = False
+for device in raid_status['devices']:
+	device_status = raid_status['devices'][device]['status']
+	#print json.dump(device_status, indent=4)
+
+	#  Only check arrays, not containers
+	if 'raid_disks' in device_status:
+		found = True
+		degraded = device_status['raid_disks'] - device_status['non_degraded_disks']
+		if degraded > 0:
+			print '{} array has {} degraded disk'.format(device, degraded)
+			critical = True
+		if False in device_status['synced']:
+			print '{} array is not synced'.format(device)
+			critical = True
+
+if warning:
+	exit(1)
+elif critical:
+	exit(2)
+elif not found:
+	print 'Could not find any RAID arrays on this system'
+	exit(3)
+else:
+	print 'RAID Array - OK'
+	exit(0)

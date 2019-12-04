@@ -1,0 +1,146 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use POSIX;
+use Getopt::Long;
+
+#  Path to smartctl program on this host
+my $smartctl = '/usr/sbin/smartctl';
+
+#  Initialize the plugin and the arguments
+my $np = Nagios::Plugin->new(
+	shortname => 'SMART',
+	usage => "Usage: check_smart [-w|--warning=THRESHOLD] [-c|--critical=THRESHOLD]",
+	version => "1.0",
+	blurb => "This plugin checks the health status of all of the SMART-enabled devices on the\n"
+		. "system where it is executed.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+	extra => "\nNOTES:\n* This plugin is designed to be installed on the system being monitored\n"
+		. "  and run via the nrpe daemon.\n"
+		. "* This plugin requires root privileges to execute the smartctl command via sudo.\n"
+		. "  To enable this, add the following line to the /etc/sudoers file:\n"
+		. "      nrpe  ALL=(root)  NOPASSWD:  /usr/sbin/smartctl\n"
+		. "  That allows the nrpe userid to execute the smartctl command as root without\n"
+		. "  entering a password.  (Check your nrpe.conf file to verify that your nrpe\n"
+		. "  daemon runs under the nrpe userid and verify the path to the smartctl\n"
+		. "  command.)\n"
+		. "* If the requiretty option is set in your /etc/sudoers file, you must turn it\n"
+		. "  off for the smartctl command.  This allows the nrpe daemon to run the command\n"
+		. "  via sudo without having a terminal session open. Look for this line in\n"
+		. "  /etc/sudoers:\n"
+		. "      Defaults    requiretty\n"
+		. "  If you find it, and it is not commented out, then add this line: (Again,\n"
+		. "  verify the path on your system.)\n"
+		. "      Defaults!/usr/sbin/smartctl !requiretty",
+ );
+
+$np->add_arg(
+	spec => 'warning|w=s',
+	help => "-w, --warning=<number>\n"
+		. "   Device tempurature warning threshold, in degrees Celcius. See\n"
+                . "   https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT for the\n"
+                . "   threshold format. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'critical|c=s',
+	help => "-c, --critical=<number>\n"
+		. "   Device tempurature critical threshold, in degrees Celcius. See\n"
+                . "   https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT for the\n"
+                . "   threshold format. By default, no threshold is set.",
+	required => 0
+);
+$np->getopts;
+my $warning = $np->opts->warning;
+my $critical = $np->opts->critical;
+
+#  Default message, assumes all devices OK.  Will be overidden by what follows, as necessary
+$np->add_message(OK, "All devices pass health and tempurature checks");
+
+#  For each device returned by a scan ...
+open(DEVICES, "sudo $smartctl --scan |")
+	or $np->nagios_exit(CRITICAL, "$smartctl --scan command failed");
+if (eof DEVICES) {
+	$np->nagios_exit(CRITICAL, "$smartctl --scan command found no devices, do you have permission to use ${smartctl}?");
+}
+while (<DEVICES>) {
+	chomp;
+	my $device = $_;
+	$device =~ s/ -d.*//;
+
+	#  Check device health
+	open(SMART, "sudo $smartctl -H $device |")
+		or $np->add_message(CRITICAL, "$smartctl -H $device command failed");
+	while (<SMART>) {
+		chomp;
+		if ($_ =~ /overall-health self-assessment/) {
+			my $result = $_;
+			$result =~ s/.*: //;
+			$np->add_perfdata(
+				label => "HEALTH",
+				value => $device . "," . $result
+			);
+			if ($result ne "PASSED") {
+				$np->add_message(CRITICAL, $device . " " . $result)
+			}
+		}
+	}
+
+	#  Check device tempurature attribute against thresholds, if there is one
+	open(SMART, "sudo $smartctl -A $device |")
+		or $np->add_message(CRITICAL, "$smartctl -A $device command failed");
+	while (<SMART>) {
+		chomp;
+		if ($_ =~ /^194/) {
+			my $temp = (split " ", $_)[9];
+			$np->add_perfdata(
+				label => "TEMP",
+				value => $device . "," . $temp,
+				warning => $warning,
+				critical => $critical
+			);
+			if ( $np->check_threshold($temp) != OK ) {
+				$np->add_message($np->check_threshold($temp), $device . ' temp=' . $temp . 'C');
+			}
+		}
+	}
+}
+
+my ($code, $message) = $np->check_messages( join => ", " ) ;
+$np->nagios_exit($code, $message);
+
+
+=head1 DESCIPTION
+
+This Nagios plugin checks the health status of all of the SMART-enabled
+devices on the system where it is executed.
+
+This plugin is designed to be installed on the system being monitored and
+run via the nrpe daemon
+
+This plugin requires sufficient privileges to execute the smartctl program.
+
+Please see the plugin help (check_smart -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

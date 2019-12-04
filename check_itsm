@@ -1,0 +1,207 @@
+#!/usr/bin/perl -w
+
+use strict;
+use warnings;
+
+use Nagios::Plugin;
+
+use POSIX;
+use Getopt::Long;
+
+#  Get a temporary directory for the dsmerror.log file that the dsmadmc command wants to create
+use File::Temp qw{ tempdir };
+my $dir = tempdir( CLEANUP => 1 );
+$ENV{DSM_LOG} = $dir;
+
+my $np = Nagios::Plugin->new(
+	shortname => 'ITSM',
+	usage => "Usage:\n" 
+		. "Backup Status Check:\n"
+		. " check_itsm -u|--userid=<admin_id> -p|--password=<admin_psw>\n"
+		. "  -n|--nodename=<nodename> [-s|--schedule=<schedule_name>]\n"
+		. "Storage Pool Utilization Check:\n"
+		. " check_itsm -u|--userid=<admin_id> -p|--password=<admin_psw>\n"
+		. "  -S|--stgpool=<stgpool> [-w|--warning=INTEGER] [-c|--critical=INTEGER]",
+	version => "1.0",
+	blurb => "This plugin performs two different checks:\n"
+		. " 1) It checks the current status of the scheduled backup for a given TSM\n"
+		. "    client node,\n"
+		. " 2) It checks the percent utilization of a given storage pool on a TSM\n"
+		. "    server.",
+	extra => "\nNOTE:\nThis plugin must be run on a host that has the Tivoli Storage Manager client\n"
+		. "installed and configured.  A userid must be specified which has authority to\n"
+		. "issue the \"dsmadmc query event\" and the \"dsmcadmc query stgpool\"\n"
+		. "administrative commands.  With these requirements it is perhaps easiest to\n"
+		. "deploy this plugin on a TSM server where it may be run remotely via the\n"
+		. "facilities of the nrpm daemon.",
+	url => "http://sourceforge.net/projects/nagios-plugins"
+);
+
+$np->add_arg(
+	spec => 'userid|u=s', 
+	help => "-u, --userid=<string>\n"
+		. "    An ITSM administrative userid with the authority to execute the\n" 
+		. "    \"dsmadmc query event\" and the \"dsmcadmc query stgpool\" administrative\n"
+		. "    commands.",
+	required => 1
+);
+$np->add_arg(
+	spec => 'password|p=s', 
+	help => "-p, --password=<string>\n"
+		. "    The password for the ITSM administrative userid.", 
+	required => 1
+);
+$np->add_arg(
+	spec => 'nodename|n=s',
+	help => "-n, --nodename=<string>\n"
+		. "    The TSM name of the node for which backup status is to be checked.\n"
+		. "    Required for backup status queries.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'schedule|s=s',
+	help => "-s, --schedule=<string>\n"
+		. "    The name for the backup schedule for which this node's backup status is to\n"
+		. "    be checked.  Optional.  If the name is not specified and the node is included\n"
+		. "    in more than one schedule, then the status for the last schedule in the list\n"
+		. "    will be returned.",
+	default => '\*',
+	required => 0
+);
+$np->add_arg(
+	spec => 'stgpool|S=s',
+	help => "-S, --stgpool=<string>\n"
+		. "    The name of the storage pool for which utilization is to be checked.\n"
+		. "    Required for storage pool utilization queries.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'warning|w=s',
+	help => "-w, --warning=<number>\n"
+		. "    Storage pool utilization percentage warning threshold. See\n"
+                . "    https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT for the\n"
+                . "    threshold format. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'critical|c=s',
+	help => "-c, --critical=<number>\n"
+		. "    Storage pool utilization percentage critical threshold. See\n"
+                . "    https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT for the\n"
+                . "    threshold format. By default, no threshold is set.",
+	required => 0
+);
+$np->getopts;
+my $userid = $np->opts->userid;
+my $password = $np->opts->password;
+my $nodename = $np->opts->nodename;
+my $schedule = $np->opts->schedule;
+my $stgpool = $np->opts->stgpool;
+my $warning = $np->opts->warning;
+my $critical = $np->opts->critical;
+
+#  When they give us a node name, they must be asking for backup status
+if ($nodename) {
+	$np->nagios_die("--userid and --password are required arguments.") unless ($userid and $password and $schedule);
+
+	my ($scheduled_time, $actual_time, $status, $result);
+	my $today = strftime "%m/%d/%Y", localtime;
+
+	#  Do the dsmadmc command asking for the data in comma delimited format
+	open(STATUS, "dsmadmc -id=$userid -password=$password -commadelimited -outfile query event \\* $schedule nodes=$nodename begindate=$today | grep -i \",$nodename,\" |")
+		or $np->nagios_exit(CRITICAL, "dsmadmc command failed");
+	while (<STATUS>) {
+		chomp;
+		$result = $_;
+		$np->add_perfdata(
+			label => "TSM.Backup.Status",
+			value => "$result"
+		);
+		($scheduled_time, $actual_time, $nodename, $schedule, $status) = split(',', $result);
+	}
+
+	#  Return the result
+	if (!$status) {
+		$np->add_message(CRITICAL, 'no response from ITSM'); 
+	} elsif ($status eq 'In Progress') {
+		$np->add_message(OK, 'backup process is in progress');
+	} elsif ($status eq 'Started') {
+		$np->add_message(OK, 'backup process is starting');
+	} elsif ($status eq 'Restarted') {
+		$np->add_message(OK, "backup process restarted at $actual_time");
+	} elsif ($status eq 'Future') {
+		$np->add_message(OK, "backup is scheduled for $scheduled_time");
+	} elsif ($status eq 'Completed') {
+		$np->add_message(OK, "backup ran successfully at $actual_time");
+	} elsif ($status eq 'Pending') {
+		$np->add_message(OK, "backup is waiting to run after $scheduled_time");
+	} elsif ($status eq 'Failed 12') {
+		$np->add_message(WARNING, "backup ran at $actual_time ending with $status error");
+	} elsif ($status eq 'Missed') {
+		$np->add_message(CRITICAL, "backup was missed at $scheduled_time");
+	} else {
+		$np->add_message(CRITICAL, "backup status message \"$status\" not understood");
+	}
+} else {
+	#  Otherwise, check storage pool utilization
+	$np->nagios_die("Either --nodename or --stgpool must be specified.") unless ($stgpool);
+	$np->nagios_die("--userid and --password are required arguments.") unless ($userid and $password);
+
+	my ($result, $pool_type, $capacity, $util, $migr, $high, $low, $next);
+	#  Do the dsmadmc command, asking for the results in tab delimited format
+	#  because fields can have numbers with commas in them
+	open(UTIL, "dsmadmc -id=$userid -password=$password -tabdelimited -outfile query stgpool \"$stgpool\" | grep -i \"$stgpool\" |")
+		or $np->nagios_exit(CRITICAL, "dsmadmc command failed");
+	while (<UTIL>) {
+		chomp;
+		$result = $_;
+		#  Reformat result into a comma delimited string
+		$result =~ s/,//g;
+		$result =~ s/\t/,/g;
+		$np->add_perfdata(
+			label => "TSM.STGPOOL.Status",
+			value => "$result",
+			warning => $warning,
+			critical => $critical
+		);
+		($stgpool, $pool_type, $capacity, $util, $migr, $high, $low, $next) = split(",", $result);
+	}
+
+	#  Return the result
+	if (!$util) {
+		$np->add_message(CRITICAL, "no response from ITSM"); 
+	} else {
+		$np->add_message($np->check_threshold($util), "$stgpool is ${util}% full") ;
+	}
+}
+
+my ($code, $message) = $np->check_messages;
+$np->nagios_exit($code, $message);
+
+=head1 DESCIPTION
+
+This is a Nagios plugin intended to provide monitoring of IBM Tivoli Storage 
+Manager (ITSM or TSM) backups and storage pools.  The plugin may be used
+to query the status of a client node's scheduled backup.  It may also be used
+to monitor the percent utilization of a server's backup pool(s).  
+
+Please see the plugin help (check_itsm -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King <dave at daveking dot com>
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut

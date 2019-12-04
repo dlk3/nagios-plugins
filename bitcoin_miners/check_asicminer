@@ -1,0 +1,212 @@
+#!/usr/bin/perl -w
+
+use POSIX;
+use strict;
+
+use Nagios::Plugin;
+
+use Getopt::Long;
+use LWP::Simple;
+
+my $np = Nagios::Plugin->new(
+	shortname => 'ASICMINER',
+	usage => "Usage: check_asicminer [-u|--url=<url>] [-w|--warning=THRESHOLD]\n"
+		. "       [-c|--critical=THRESHOLD]",
+	version => "1.0",
+	blurb => "This plugin checks the status of ASICMiner bitcoin mining blade and cube \n"
+		. "devices.  Mining speed (MH/s), mining pool and chip faults are checked.",
+	url => "http://sourceforge.net/projects/nagios-plugins",
+	extra => "\nSee https://nagios-plugins.org/doc/guidelines.html#THRESHOLDFORMAT\n"
+		. "for the details on Nagios threshold formats."
+
+);
+
+$np->add_arg(
+	spec => 'url|u=s', 
+	help => "-u, --url>\n"
+		. "   The URL of the device's configuration page.\n" 
+		. "   Default: http://192.168.1.254:8080",
+	default => "http://192.168.1.254:8080",
+	required => 1
+);
+$np->add_arg(
+	spec => 'warning|w=s',
+	help => "-w, --warning=<number>\n"
+		. "    Mining rate (MH/s) warning threshold. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'critical|c=s',
+	help => "-c, --critical=<number>\n"
+		. "    Mining rate (MH/s) critical threshold. By default, no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'chipwarning|x=s',
+	help => "-x, --chipwarning=<theshold>\n"
+		. "    Chip failure warning theshold, in number of failing chips. By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+$np->add_arg(
+	spec => 'chipcritical|y=s',
+	help => "-y, --chipcritical=<threshold>\n"
+		. "    Chip failure critical theshold, in number of failing chips. By default,\n"
+		. "    no threshold is set.",
+	required => 0
+);
+
+$np->getopts;
+my $url = $np->opts->url;
+my $warning = $np->opts->warning;
+my $critical = $np->opts->critical;
+my $chip_warning = $np->opts->chipwarning;
+my $chip_critical = $np->opts->chipcritical;
+
+#  Get HTML output from the device url
+my $html = get $url;
+$np->nagios_exit(CRITICAL, "Device did not respond") unless defined $html;
+
+#  Extract performance data from HTML
+if ($html =~ /<title>BE Cube Miner</) {
+	#  It's a cube
+	my ($blade, $zeros);
+	if ($html =~ />MHS:([^ ]*).*<br>Current pool: ([^<]*)</) {
+		my $mhs = $1;
+		my $pool = $2;
+		
+		$np->add_message($np->check_threshold($mhs), "Mining at $mhs MH/s") ;
+		$np->add_perfdata(
+			label =>"MH/s",
+			value => "$mhs",
+			warning => $warning,
+			critical => $critical
+		);
+		
+		if ($pool =~ /\(A\)/) {
+			$np->add_message(OK, "Mining on the primary pool");
+		} else {
+			$np->add_message(WARNING, "Mining on the backup pool");
+		}
+		$np->add_perfdata(
+			label =>"Pool",
+			value => "$pool"
+		);
+	} else {
+		$np->add_perfdata(
+			label => "HTML",
+			value => "$html"
+		);
+		$np->nagios_exit(CRITICAL, "Malformed HTML response");
+	}
+	foreach ("ASIC_01-16: ", "ASIC_17-32: ", "ASIC_33-48: ", "ASIC_49-64: ", "ASIC_65-80: ", "ASIC_81-96: ") {
+		my $blade = $_;
+		if ($html =~ /<br>${blade}([^<]*)</) {
+			my $zeros = $1;
+			$zeros =~ s/ //g;
+			$blade =~ s/: $//;
+			if ($zeros =~ /x/i) { 
+				#  Get the number of "X"s in the string, i.e., count the number of chip faults
+				my $chip_faults =()= $zeros =~ /x/gi;
+				$np->add_message(WARNING, "$chip_faults chip faults on $blade");
+			}
+			$np->add_perfdata(
+				label => $blade,
+				value => $zeros
+			)
+		} else {
+			$np->add_perfdata(
+				label => "HTML",
+				value => "$html"
+			);
+			$np->nagios_exit(CRITICAL, "Malformed HTML response");
+		}	
+	}
+} else {
+	#  It's a blade
+	my $pool;
+	
+	if ($html =~ />Total MHS:<\/td><td align='left'>([^<]*)<.*<br>Current Server: ([^<]*)<.*>Chip: ([^<]*)</) {
+		my $mhs = $1;
+		$pool = $2;
+		my $zeros = $3;
+		
+		$np->add_message($np->check_threshold($mhs), "Mining at $mhs MH/s") ;
+		$np->add_perfdata(
+			label =>"MH/s",
+			value => "$mhs",
+			warning => $warning,
+			critical => $critical
+		);
+
+		#  Alert on chip faults
+		my $chip_faults =()= $zeros =~ /x/gi;
+		$np->add_message($np->check_threshold(
+			check => $chip_faults, 
+			warning => $chip_warning, 
+			critical => $chip_critical
+		), "$chip_faults chip faults");
+
+		$np->add_perfdata(
+			label => "Chips",
+			value => $zeros,
+			warning => $chip_warning,
+			critical => $chip_critical
+		)
+	} else {
+		$np->add_perfdata(
+			label => "HTML",
+			value => "$html"
+		);
+		$np->nagios_exit(CRITICAL, "Malformed HTML response");
+	}	
+	
+	if ($html =~ /name=MPRT value='([^,]*),.*name=MURL value='([^,]*),/) {
+		if ("$2:$1" eq "$pool") {
+			$np->add_message(OK, "Mining on the primary pool");
+		} else {
+			$np->add_message(WARNING, "Mining on the backup pool");
+		}
+		$np->add_perfdata(
+			label =>"Pool",
+			value => "$pool"
+		);
+	} else {
+		$np->add_perfdata(
+			label => "HTML",
+			value => "$html"
+		);
+		$np->nagios_exit(CRITICAL, "Malformed HTML response");
+	}	
+}
+
+my ($code, $message) = $np->check_messages( join => ", ");
+$np->nagios_exit($code, $message);
+
+=head1 DESCRIPTION
+
+This is a Nagios plugin intended to provide monitoring of ASICMiner bitcoin
+mining blades and cubes.  It checks mining rate, mining pool and chip
+faults.
+
+Please see the plugin help (check_asicminer -h) for additional details.
+
+=head1 COPYRIGHT AND LICENSE
+
+Copyright (c) 2014 by David King
+
+This program is free software; you can redistribute it and/or modify
+it under the terms of the GNU General Public License as published by
+the Free Software Foundation; either version 3 of the License, or
+(at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program. If not, see http://www.gnu.org/licenses/
+
+=cut
+
