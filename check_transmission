@@ -12,7 +12,7 @@ use File::Which;
 #  Initialize the plugin and the arguments
 my $np = Nagios::Plugin->new(
 	shortname => 'TRANSMISSION',
-	usage => "Usage: check_transmission [-H|--hostname=<hostname>] [-p|--port=<port>]",
+	usage => "Usage: check_transmission [-H|--hostname=<hostname>] [-u|--user=<rpc_userid>] [-P|--password=<rpc_password>] [-p|--port=<port>]",
 	version => "1.0",
 	blurb => "This plugin monitors the status of the transmission bittorrent daemon service.",
 	url => "http://sourceforge.net/projects/nagios-plugins",
@@ -27,7 +27,19 @@ $np->add_arg(
 	help => "-H, --hostname=<hostname>\n"
 		. "   Hostname or IP address of the host running the transmission daemon.\n"
 		. "   Default = 127.0.0.1",
-	default => 127.0.0.1,
+	default => "127.0.0.1",
+	required => 0
+);
+$np->add_arg(
+	spec => 'user|u=s',
+	help => "-u, --user=<rpc_userid>\n"
+		. "  RPC userid, if required",
+	required => 0
+);
+$np->add_arg(
+	spec => 'password|P=s',
+	help => "-P, --password=<rpc_password>\n"
+		. "  RPC password, if required",
 	required => 0
 );
 $np->add_arg(
@@ -41,6 +53,12 @@ $np->add_arg(
 $np->getopts;
 my $hostname = $np->opts->hostname;
 my $port = $np->opts->port;
+my $rpc_auth = "";
+if ((defined $np->opts->user) && (defined $np->opts->password)) {
+	my $user = $np->opts->user;
+	my $password = $np->opts->password;
+	$rpc_auth = "-n ${user}:$password";
+}
 
 #  Confirm the command that we need exists on this system
 my $cmd_name = "transmission-remote";
@@ -48,7 +66,7 @@ my $cmd = which($cmd_name)
 	or $np->nagios_die(CRITICAL, "$cmd_name command not in PATH");
 
 #  Check the daemon's status
-my @result = `$cmd ${hostname}:$port -si 2>&1`;
+my @result = `$cmd ${hostname}:$port $rpc_auth -si 2>&1`;
 if ($?) {
 	foreach (@result) {
 		chomp;
