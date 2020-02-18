@@ -20,3 +20,5 @@ This is a collection of plugins that I created to support my use of the [Nagios]
 + check_transmission - Monitor a transmission daemon, making sure that it's alive.  No fancy stats returned.  Requires File::Which module.
 
 + check_mpd - Check that MPD, a Music Player Daemon, is actively playing music.
+
++ check_bpc - Check that BackupPC server has a acurrent backup for each registered host.

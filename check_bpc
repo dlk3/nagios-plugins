@@ -1,0 +1,52 @@
+#!/usr/bin/env python
+
+bpc_admin_id = 'userid'
+bpc_admin_psw = 'password'
+bpc_host = 'backuppc.localdomain'
+
+import requests
+from lxml import html
+
+try:
+
+	url = 'http://{}/backuppc?action=summary'.format(bpc_host)
+	page = requests.get(url, auth=(bpc_admin_id,bpc_admin_psw))
+	if page.status_code != 200:
+		print 'Unable to connect to BackupPC server, HTTP status code = {}'.format(page.status_code)
+		exit(2)
+
+	badlist = ''
+	ctr = 0
+	tree = html.fromstring(page.content)
+	all_rows = tree.xpath('//table[@id="host_summary_backups"]/tr')
+	for row in all_rows:
+		cells = row.xpath('td')
+		hostname_cell = cells[0]
+		hostname = ''
+		for tag in hostname_cell.xpath('a'):
+			hostname = tag.text
+		if hostname != '' and hostname != ' Host ':
+			ctr += 1
+			age = float(cells[9].text)
+			if age >= 2:
+				if badlist == '':
+					badlist += '{} = {}'.format(hostname, age)
+				else:
+					badlist += '\n{} = {}'.format(hostname, age)
+					
+	if badlist == '':
+		print '{} hosts with current backups'.format(ctr)
+		exit(0)
+	elif len(badlist.split('\n')) == 1:
+		print '1 host without current backup\n{}'.format(badlist)
+		exit(0)
+	elif len(badlist.split('\n')) < ctr:
+		print '{} hosts without current backups\n{}'.format(len(badlist.split('\n')), badlist)
+		exit(1)
+	else:
+		print 'No hosts have current backups:\n{}'.format(badlist)
+		exit(2)
+		
+except Exception as e:
+	print 'Unexpected python exception:\n{}'.format(e)
+	exit(2)
