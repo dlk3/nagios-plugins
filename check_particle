@@ -63,13 +63,13 @@ def durationString(seconds):
 	return str
 
 #  Help and command line parsing		
-usage = 'usage: %prog -h|--hostname <name> [-w|-warning <seconds>] [-c|--critical <seconds>]'
-description = 'This is a Nagios plugin that checks the status of a Praticle IoT device by querying its status in the Particle Cloud.'
+usage = 'usage: \033[00;01m%prog\033[00m -H|--hostname HOSTNAME [-w|-warning WARNING] [-c|--critical CRITICAL]'
+description = 'This is a Nagios plugin that checks the status of a Particle IoT device by querying its status in the Particle Cloud.'
 parser = OptionParser(usage=usage, description=description)
-parser.add_option('-c', '--critical', dest='critical', default='1440', help='mark device as being in critical status if the length of time since last handshake, in minutes, exceeds this value.  Default is 1440 minutes = one day.')
-parser.add_option('-H', '--hostname', dest='hostname', help='the name or id of the device as known to the Particle Cloud')
-parser.add_option('-w', '--warning', dest='warning', default='360', help='mark device as being in warning status if the length of time since last handshake, in minutes, exceeds this  value.  Default is 360 minutes = six hours')
-parser.add_option('-v', '--verbose', action='store_true', dest='verbose', default=False, help='mark device as being in warning status if the length of time since last handshake, in minutes, exceeds this  value')
+parser.add_option('-c', '--critical', dest='critical', default='1440', help='(optional) number of minutes.  If this device has not been heard from in this many minutes, mark this device as being in CRITICAL status.  Default value is 1440 minutes = one day.')
+parser.add_option('-H', '--hostname', dest='hostname', help='(required) name or id of the device as it is known to the Particle Cloud.')
+parser.add_option('-w', '--warning', dest='warning', default='360', help='{optional) number of minutes.  If this device has not been heard from in this many minutes, mark this device as being in WARNING status.  Default value is 360 minutes = six hours.')
+parser.add_option('-v', '--verbose', action='store_true', dest='verbose', default=False, help='(optional) print additional process information.')
 (options, args) = parser.parse_args()
 if particle_api_token == '':
 	print('PLUGIN CONFIGURATION ERROR: A Particle API access token must be configured at the top of the plugin script')
