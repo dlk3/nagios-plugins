@@ -47,19 +47,19 @@ def durationString(seconds):
 	seconds = frac * 60
 	str = ''
 	if days > 0:
-		str += '{} days'.format(round(days))
+		str += '{:.0f} days'.format(round(days))
 	if hours > 0:
 		if str != '':
 			str += ', '
-		str += '{} hours'.format(round(hours))
+		str += '{:.0f} hours'.format(round(hours))
 	if minutes > 0:
 		if str != '':
 			str += ', '
-		str += '{} minutes'.format(round(minutes))
+		str += '{:.0f} minutes'.format(round(minutes))
 	if seconds > 0:
 		if str != '':
 			str += ', '
-		str += '{} seconds'.format(round(seconds))
+		str += '{:.0f} seconds'.format(round(seconds))
 	return str
 
 #  Help and command line parsing		
