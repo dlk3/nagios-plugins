@@ -1,0 +1,65 @@
+#!/usr/bin/env python
+
+import requests
+import datetime
+import MySQLdb
+
+#  If the databases are not updated within this number of minutes we 
+#  will consider them to be down
+time_limit = 30
+
+#  SQL database access
+dbConfig = {
+    'user': '',
+    'passwd': '',
+    'host': '',
+    'db': ''
+}
+
+#  Check that scraper.js is actively updating the SQL database
+try:
+    db = MySQLdb.connect(**dbConfig)
+    sql = 'SELECT `updated` FROM `torrents` ORDER BY `updated` DESC LIMIT 1'
+    cur = db.cursor()
+    cur.execute(sql)
+    result = cur.fetchone()
+    cur.close()
+except Exception as e:
+    print('Query to SQL database failed.\n{}'.format(e))
+    exit(2)
+try:
+    #now = datetime.datetime.now()
+    now = datetime.datetime.utcnow()
+    sql_diff = round((now - result[0]).total_seconds() / time_limit)
+    if sql_diff > 60:
+        print('scraper.js may have failed.\nSQL database has not been updated for {} minutes'.format(sql_diff))
+        exit(2)
+except Exception as e:
+    print('Error checking "updated" value in SQL database\n{}'.format(e))
+    exit(2)
+
+#  Check that loader.js is actively updating the elasticsearch index
+try:
+    result = requests.get('http://localhost:9200/torrents/_search?size=1&sort=trackerUpdated:desc')
+except Exception as e:
+    print('HTTP request to elasticsearch server localhost:9200 failed.\n{}'.format(e))
+    exit(2)
+if result.status_code == 200:
+    try:
+        now = datetime.datetime.utcnow()
+        trackerUpdated = datetime.datetime.strptime(result.json()['hits']['hits'][0]['_source']['trackerUpdated'], '%Y-%m-%dT%H:%M:%S.000Z')
+        es_diff = round((now - trackerUpdated).total_seconds() / 60)
+        if es_diff > time_limit:
+            print('loader.js may have failed.\nelasticsearch index has not been updated for {} minutes'.format(es_diff))
+            exit(2)
+    except Exception as e:
+        print('Error checking "trackerUpdated" value in elasticsearch index\n{}'.format(e))
+        exit(2)
+else:
+    print('HTTP request to elasticsearch server localhost:9200 failed.\n{}'.format(result.text))
+    exit(2)
+
+#  If we got this far then everything is ok
+print('SQL database updated {} minutes ago'.format(sql_diff))
+print('elasticsearch index updated {} minutes ago'.format(es_diff))
+exit(0)
