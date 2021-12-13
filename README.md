@@ -9,6 +9,8 @@ This is a collection of plugins that I created to support my use of the [Nagios]
 
 + check_itsm - Monitor scheduled backups for client nodes and storage pool utilization on a Tivoli Storage Manager server.  See plugin help for special setup requirements.
 
++ check_particle - Check online status of Particle IoT devices via the Particle Cloud API.
+
 + check_smart - Monitor health of SMART-enabled devices.  See plugin help for special setup requirements.
 
 + check_s3 - Check if a specific Amazon AWS S3 bucket contains a file that matches the specified regex.  Requires Net::Amazon::S3 modules.

@@ -1,0 +1,140 @@
+#!/usr/bin/env python
+
+#  Copyright (C) 2021  David King <dave@daveking.com>
+#
+#  This program is free software: you can redistribute it and/or modify
+#  it under the terms of the GNU General Public License as published by
+#  the Free Software Foundation, either version 3 of the License, or
+#  (at your option) any later version.
+#
+#  This program is distributed in the hope that it will be useful,
+#  but WITHOUT ANY WARRANTY; without even the implied warranty of
+#  MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+#  GNU General Public License for more details.
+#
+#  You should have received a copy of the GNU General Public License
+#  along with this program.  If not, see <http://www.gnu.org/licenses/>.
+#################################################################################
+#
+#  Install the Particle CLI and do "particle token create --never-expire" 
+#  to get an API token.
+#
+#  See https://docs.particle.io/reference/developer-tools/cli/#particle-token-create
+#
+particle_api_token = ''
+
+import calendar
+import json
+import math
+from optparse import OptionParser
+import requests
+import time
+
+#  Convert a string to an integer or return an error if it can't be done
+def getInteger(key, value):
+	try:
+		return(int(value))
+	except Exception as e:
+		print('COMMAND LINE OPTION ERROR: {} option is not a valid integer value'.format(key))
+		exit(1)
+
+#  Convert a number of seconds into a string of the form "X days, X hours, 
+#  X minutes, X seconds"
+def durationString(seconds):
+	(frac, days) = math.modf(seconds / (24 * 60 * 60))
+	(frac, hours) = math.modf((frac * 24 * 60 * 60) / (60 * 60))
+	(frac, minutes) = math.modf((frac * 60 * 60) / 60)
+	seconds = frac * 60
+	str = ''
+	if days > 0:
+		str += '{} days'.format(round(days))
+	if hours > 0:
+		if str != '':
+			str += ', '
+		str += '{} hours'.format(round(hours))
+	if minutes > 0:
+		if str != '':
+			str += ', '
+		str += '{} minutes'.format(round(minutes))
+	if seconds > 0:
+		if str != '':
+			str += ', '
+		str += '{} seconds'.format(round(seconds))
+	return str
+
+#  Help and command line parsing		
+usage = 'usage: %prog -h|--hostname <name> [-w|-warning <seconds>] [-c|--critical <seconds>]'
+description = 'This is a Nagios plugin that checks the status of a Praticle IoT device by querying its status in the Particle Cloud.'
+parser = OptionParser(usage=usage, description=description)
+parser.add_option('-c', '--critical', dest='critical', default='1440', help='mark device as being in critical status if the length of time since last handshake, in minutes, exceeds this value.  Default is 1440 minutes = one day.')
+parser.add_option('-H', '--hostname', dest='hostname', help='the name or id of the device as known to the Particle Cloud')
+parser.add_option('-w', '--warning', dest='warning', default='360', help='mark device as being in warning status if the length of time since last handshake, in minutes, exceeds this  value.  Default is 360 minutes = six hours')
+parser.add_option('-v', '--verbose', action='store_true', dest='verbose', default=False, help='mark device as being in warning status if the length of time since last handshake, in minutes, exceeds this  value')
+(options, args) = parser.parse_args()
+if particle_api_token == '':
+	print('PLUGIN CONFIGURATION ERROR: A Particle API access token must be configured at the top of the plugin script')
+	exit(3)
+critical = getInteger('critical', options.critical)
+warning = getInteger('warning', options.warning)
+if not options.hostname:
+	print('COMMAND LINE OPTION ERROR: hostname option is required')
+	exit(3)
+#  Convert options.critical from minutes to seconds
+try:
+	options.critical = float(options.critical) * 60
+except:
+	print('COMMAND LINE OPTION ERROR: critical threshold value is not numeric')
+	exit(3)
+#  Convert options.warning from minutes to seconds
+try:
+	options.warning = float(options.warning) * 60
+except:
+	print('COMMAND LINE OPTION ERROR: warning threshold value is not numeric')
+	exit(3)
+
+#  Get device status info from the Particle Cloud	
+if options.verbose:
+	print('Asking Particle Cloud for a list of your devices')
+headers = {
+	'Authorization': 'Bearer {}'.format(particle_api_token)
+}
+response = requests.get('https://api.particle.io/v1/devices', headers=headers)
+if response.status_code == 200:
+	for device in response.json():
+		if device['name'] == options.hostname or device['id'] == options.hostname:
+			if options.verbose:
+				print('Found device named "{}" with id = {}'.format(device['name'], device['id']))
+				print(json.dumps(device, indent=4))
+			if device['online']:
+				#  Convert last_heard string into the number of seconds since the epoch
+				last_heard = time.strptime(device['last_heard'], '%Y-%m-%dT%H:%M:%S.%fZ')
+
+				#  Calculate the number of seconds it has been since the last_heard time
+				duration = time.time() - calendar.timegm(last_heard)
+
+				#  Alert if any of our thresholds have been exceeded
+				if duration > options.critical:
+					print('CRITICAL: it has been {} since this device was last heard from.'.format(durationString(duration)))
+					exit(2)
+				if duration > options.warning:
+					print('WARNING: it has been {} since this device was last heard from.'.format(durationString(duration)))
+					exit(1)
+
+				#  Otherwise, we're cool
+				print('OK: device is online, last heard from {} ago'.format(durationString(duration)))
+				exit(0)
+			else:
+				print('CRITICAL: device is not marked as being online')
+				exit(2)
+				
+	#  If we fell all the way through that loop then we didn't find a matching 
+	#  device in the results we got from the /v1/devices call  
+	if options.verbose:
+		print('Response from the Particle Cloud listing all known devices:')
+		print(json.dumps(response.json(), indent=4))
+	print('CRITCAL: "{}" device is not known to the Particle Cloud.'.format(options.hostname))
+	exit(2)
+	
+else:
+	print('COMMUNICATIONS ERROR: HTTP Status Code: {}.  Unable to get a list of your devices from the Particle Cloud.  Is your API key valid?'.format(response.status_code))
+	exit(2)

@@ -1,5 +1,11 @@
 #!/usr/bin/perl -w
 
+########################################################################
+#  This Source Code Form is subject to the terms of the Mozilla Public #
+#  License, v. 2.0. If a copy of the MPL was not distributed with this #
+#  file, You can obtain one at http://mozilla.org/MPL/2.0/.            #
+########################################################################
+
 use POSIX;
 use strict;
 
@@ -111,8 +117,10 @@ sub send_command {
 	or $np->nagios_die('CRITICAL', "Unable to connect to port $port on $host");
 	$socket->send($cmd);
 	my $result;
-	$socket->recv($result, 4096);
+	$socket->recv($result, 8192);
 	$socket->close();
+	#  Remove any garbage characters at the end of the string
+	$result =~ s/[^[:print:]]*$//g;
 	#  Return decoded JSON, returning empty string if that fails
 	eval {
 		return decode_json($result);
@@ -122,7 +130,7 @@ sub send_command {
 }
 
 #  Get cgminer's summary information
-my $summary= send_command($host, $port, '{"command":"summary"}');
+my $summary = send_command($host, $port, '{"command":"summary"}');
 $np->nagios_die("CRITICAL", "cgminer did not respond to summary query") unless defined $summary;
 
 #  Get cgminer's pool list
