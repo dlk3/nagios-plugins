@@ -1,0 +1,54 @@
+#!/bin/sh
+
+MPS=${@%/}
+
+RC=0
+MSG=""
+for MP in $MPS; do
+
+  touch "${MP}/.touch_test" &>/dev/null
+  if [ $? == 0 ]; then
+    rm "${MP}/.touch_test"
+    continue
+  fi
+
+  if grep -q " $MP " /etc/mtab &>/dev/null; then
+    umount -f "$MP"
+  fi
+
+  mount "$MP" &>/dev/null
+  if [ $? != 0 ]; then
+    if [ "$MSG" != "" ]; then
+      MSG="${MSG}, "
+    fi
+    MSG="${MSG}Unable to mount \"$MP\""
+    RC=2
+    continue
+  fi
+
+  touch "${MP}/.touch_test" &>/dev/null
+  if [ $? == 0 ]; then
+    rm "${MP}/.touch_test"
+    MSG="${MSG}Remounted \"$MP\""
+    continue
+  fi
+
+  if [ "$MSG" != "" ]; then
+    MSG="${MSG}, "
+  fi
+  MSG="${MSG}|Unable to mount \"$MP\""
+  RC=2
+
+done
+
+if [ $RC -eq 0 ]; then
+  if [ "$MSG" != "" ]; then
+    echo "OK: $MSG|Checked ${MPS}"
+  else
+    echo "OK|Checked ${MPS}"
+  fi
+  exit
+else
+  echo "CRITICAL: $MSG|Checked ${MPS}"
+  exit $RC
+fi

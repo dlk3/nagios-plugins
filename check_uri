@@ -30,6 +30,7 @@ try Digest Authentication.'''
 	parser.add_option('--validate', dest='validate', action='store_false', default=True, help='Do not check the validity of SSL certificates')
 	parser.add_option('-a', '--auth', dest='auth', help='Colon seperated user and password string for authentication: "userid:passwrd"')
 	parser.add_option('-u', '--uri', dest='uri', default='/', help='URI string to be tested.  Default = "/"')
+	parser.add_option('-s', '--string', dest='string', default='', help='A string that must be part of the response')
 	parser.add_option('-t', '--timeout', dest='timeout', default=10, help='Timeout, in seconds. Default = 10')
 	(opts, args) = parser.parse_args()
 
@@ -67,6 +68,9 @@ try Digest Authentication.'''
 			response = requests.get(url, timeout=opts.timeout)
 		if response.status_code != 200:
 			return_critical('HTTP status code: {}'.format(response.status_code))
+		if opts.string != '':
+			if opts.string not in response.text:
+				return_critical('The specified string was not included in the response\nSpecified string = {}|response.text:\n{}'.format(opts.string, response.text))
 	except requests.exceptions.Timeout as e:
 		return_critical('Timed out while waiting for response')
 	except requests.exceptions.SSLError as e:

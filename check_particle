@@ -16,6 +16,9 @@
 #  along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #################################################################################
 #
+#  A Particle API access token is required by this script.  It may be specified
+#  here or it may be entered on the command line using the "--token" option.
+#
 #  Install the Particle CLI and do "particle token create --never-expire" 
 #  to get an API token.
 #
@@ -66,11 +69,14 @@ def durationString(seconds):
 usage = 'usage: \033[00;01m%prog\033[00m -H|--hostname HOSTNAME [-w|-warning WARNING] [-c|--critical CRITICAL]'
 description = 'This is a Nagios plugin that checks the status of a Particle IoT device by querying its status in the Particle Cloud.'
 parser = OptionParser(usage=usage, description=description)
+parser.add_option('-t', '--token', dest='token', help='(required) Particle API access token.  May be hard coded in the script or specified on the command line using this option.  To create a token see https://docs.particle.io/reference/developer-tools/cli/#particle-token-create')
 parser.add_option('-c', '--critical', dest='critical', default='1440', help='(optional) number of minutes.  If this device has not been heard from in this many minutes, mark this device as being in CRITICAL status.  Default value is 1440 minutes = one day.')
 parser.add_option('-H', '--hostname', dest='hostname', help='(required) name or id of the device as it is known to the Particle Cloud.')
 parser.add_option('-w', '--warning', dest='warning', default='360', help='{optional) number of minutes.  If this device has not been heard from in this many minutes, mark this device as being in WARNING status.  Default value is 360 minutes = six hours.')
 parser.add_option('-v', '--verbose', action='store_true', dest='verbose', default=False, help='(optional) print additional process information.')
 (options, args) = parser.parse_args()
+if options.token:
+	particle_api_token = options.token
 if particle_api_token == '':
 	print('PLUGIN CONFIGURATION ERROR: A Particle API access token must be configured at the top of the plugin script')
 	exit(3)
