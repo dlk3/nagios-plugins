@@ -24,3 +24,7 @@ This is a collection of plugins that I created to support my use of the [Nagios]
 + check_mpd - Check that MPD, a Music Player Daemon, is actively playing music.
 
 + check_bpc - Check that BackupPC server has a acurrent backup for each registered host.
+
++ check_uri - Check URI using basic and digest authentication
+
++ check_mounts - Check that specified filesystems are RW accessable, and try to mount them if they aren't.  Mounts are attempted as non-root user.
