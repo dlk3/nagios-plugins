@@ -1,0 +1,53 @@
+#!/usr/bin/env python
+
+import json
+import subprocess
+from optparse import OptionParser
+
+usage = '\033[00;01m%prog\033[00m pod_name'
+description = 'Check the status of a podman container'
+parser = OptionParser(usage=usage, description=description)
+parser.add_option('-p','--procs',dest='procslist',help='a list of process names that should be running in the container')
+(opts, args) = parser.parse_args()
+if len(args) != 1:
+	print('CRITICAL - check_podman needs one argument, the name of the pod to check')
+	exit(2)
+podname = args[0]
+if opts.procslist:
+	#  Remove outer brackets and split into list
+	opts.procslist = opts.procslist[1:len(opts.procslist)-1]
+	opts.procslist = [x.strip().strip('"').strip("'") for x in opts.procslist.split(',')]
+
+result = subprocess.run('sudo podman ps --format=json', capture_output=True, text=True, shell=True)
+if result.returncode == 0:
+	result = json.loads(result.stdout)
+	for pod in result:
+		if podname in pod['Names']:
+			if pod['State'] == 'running':
+				if opts.procslist:
+					proc_result = subprocess.run('sudo podman top {} args'.format(podname), shell=True, capture_output=True, text=True)
+					if proc_result.returncode == 0:
+						output = proc_result.stdout.split("\n")
+						for proc in opts.procslist:
+							found = False
+							for line in output:
+								if proc in line:
+									found = True
+							if not found:
+								print('CRITICAL - "{}" not found in list of running processes'.format(proc))
+								exit(2)
+					else:
+						print('CRITICAL - podman top command failed, rc = {}'.foamet(proc_result.returncode))
+						exit(2)
+
+				print('OK - {} is running'.format(podname))
+				exit(0)
+			else:
+				print('CRITICAL - {} has State of {}'.format(podname, pod['State']))
+				exit(2)
+	print('CRITICAL - {} not found by podman ps command'.format(podname))
+	exit(2)
+else:
+	print('CRITICAL - podman ps command failed, rc = {}'.foamet(result.returncode))
+	exit(2)
+

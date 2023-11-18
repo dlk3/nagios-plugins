@@ -1,21 +1,33 @@
 #!/bin/sh
 
+#  Nagios plugin designed to check RW NFS mounts.  Mounts must be
+#  set as USERS mountable in /etc/fstab.  "sudo" is not used.
+
+#  Accepts a list of mountpoints to be checked, in the form:
+#  
+#      /mountpoint1 /mountpoint2 /mountpoint3 ...
+#
 MPS=${@%/}
 
+#  Iterate the list of mountpoints
 RC=0
 MSG=""
 for MP in $MPS; do
 
-  touch "${MP}/.touch_test" &>/dev/null
-  if [ $? == 0 ]; then
-    rm "${MP}/.touch_test"
-    continue
+  #  If already mounted, test writeable
+  if grep " $MP " /etc/mtab &>/dev/null; then
+    touch "${MP}/.touch_test" &>/dev/null
+    if [ $? == 0 ]; then
+      #  Ok, continue with next MP in list
+      rm "${MP}/.touch_test"
+      continue
+    else
+      #  Stale, unmount then remount
+      umount -f "$MP"
+    fi
   fi
 
-  if grep -q " $MP " /etc/mtab &>/dev/null; then
-    umount -f "$MP"
-  fi
-
+  #  Mount it
   mount "$MP" &>/dev/null
   if [ $? != 0 ]; then
     if [ "$MSG" != "" ]; then
@@ -26,21 +38,25 @@ for MP in $MPS; do
     continue
   fi
 
+  #  Test writeable
   touch "${MP}/.touch_test" &>/dev/null
   if [ $? == 0 ]; then
     rm "${MP}/.touch_test"
+    if [ "$MSG" != "" ]; then
+      MSG="${MSG}, "
+    fi
     MSG="${MSG}Remounted \"$MP\""
-    continue
+  else
+    MSG="${MSG}|Unable to write on \"${MP}\""
+    if [ "$MSG" != "" ]; then
+      MSG="${MSG}, "
+    fi
+    RC=2
   fi
-
-  if [ "$MSG" != "" ]; then
-    MSG="${MSG}, "
-  fi
-  MSG="${MSG}|Unable to mount \"$MP\""
-  RC=2
 
 done
 
+#  Return results
 if [ $RC -eq 0 ]; then
   if [ "$MSG" != "" ]; then
     echo "OK: $MSG|Checked ${MPS}"
